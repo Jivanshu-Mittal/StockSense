@@ -1,7 +1,7 @@
 from typing import Optional, List
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, validator
 
 from models import DocType, MoveStatus
 
@@ -91,10 +91,16 @@ class TransferCreate(BaseModel):
 
 class AdjustmentCreate(BaseModel):
     product_id: int
-    quantity: float  # positive for increase, negative for decrease
+    quantity: float  # physical count (non-negative)
     source_location_id: Optional[int] = None  # location to adjust from (if decreasing)
     dest_location_id: Optional[int] = None    # location to adjust to (if increasing)
-    # For adjustments, one of source_location_id or dest_location_id should be None/virtual
+    # For adjustments, exactly one of source_location_id or dest_location_id should be set
+
+    @validator('quantity')
+    def quantity_must_be_non_negative(cls, v):
+        if v < 0:
+            raise ValueError('Quantity must be non-negative')
+        return v
 
     class Config:
         from_attributes = True

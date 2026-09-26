@@ -418,24 +418,12 @@ def create_adjustment_reconciliation(
     if location.is_virtual:
         raise HTTPException(status_code=400, detail="Location must be physical for adjustments")
 
-    # Generate reference
-    ref = generate_reference(db, models.DocType.ADJUSTMENT)
-
-    # Create movement record
-    move = models.StockMovement(
-        document_type=models.DocType.ADJUSTMENT,
-        status=models.MoveStatus.DONE,  # Adjustments are completed immediately
-        reference=ref,
-        product_id=payload.product_id,
-        quantity=abs(payload.quantity),  # Store positive quantity
-        source_location_id=payload.source_location_id if payload.quantity < 0 else None,
-        dest_location_id=payload.dest_location_id if payload.quantity > 0 else None,
-        responsible_id=current_user.id
-    )
-    db.add(move)
-    db.commit()
-    db.refresh(move)
-    return move
+    # Get current stock for the product at this location
+    stock_quant = db.query(models.StockQuant).filter(
+        models.StockQuant.product_id == payload.product_id,
+        models.StockQuant.location_id == location_id
+    ).first()
+    current_stock = stock_quant.quantity if stock_quant ქ
 
 
 # Note: The validation endpoints for transfers and adjustments are not required as they are completed immediately.
