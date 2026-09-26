@@ -404,5 +404,63 @@ const styles = StyleSheet.create({
     color: '#2563eb',
     fontSize: 14,
     fontWeight: '500',
+  },
+  // Password Reset Styles
+  resetContainer: {
+    flex: 1,
+    backgroundColor: '#f3f4f6',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  resetTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#1f2937',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  resetSubtitle: {
+    fontSize: 16,
+    color: '#6b7280',
+    textAlign: 'center',
+    marginBottom: 32,
+  },
+  resetMessage: {
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  resetMessageSuccess: {
+    backgroundColor: '#dcfce7',
+    borderColor: '#16a34a',
+    color: '#15803d',
+  },
+  resetMessageError: {
+    backgroundColor: '#fee2e2',
+    borderColor: '#dc2626',
+    color: '#991b1b',
+    borderWidth: 1,
+  },
+  backToLogin: {
+    marginTop: 24,
+    alignItems: 'center',
+  },
+  backToLoginText: {
+    color: '#2563eb',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  forgotPassword: {
+    marginTop: 24,
+    alignItems: 'center',
+  },
+  forgotPasswordText: {
+    color: '#2563eb',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  buttonLoading: {
+    opacity: 0.7,
   }
 });

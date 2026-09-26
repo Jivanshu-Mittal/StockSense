@@ -423,7 +423,59 @@ def create_adjustment_reconciliation(
         models.StockQuant.product_id == payload.product_id,
         models.StockQuant.location_id == location_id
     ).first()
-    current_stock = stock_quant.quantity if stock_quant ქ
+    current_stock = stock_quant.quantity if stock_quant else 0.0
+
+    # Calculate the difference: physical count - recorded stock
+    quantity_difference = payload.quantity - current_stock
+
+    # If no difference, still create a movement record for audit trail with zero quantity
+    if quantity_difference == 0:
+        move = models.StockMovement(
+            document_type=models.DocType.ADJUSTMENT,
+            status=models.MoveStatus.DONE,
+            reference=generate_reference(db, models.DocType.ADJUSTMENT),
+            product_id=payload.product_id,
+            quantity=0.0,
+            source_location_id=None,
+            dest_location_id=None,
+            responsible_id=current_user.id
+        )
+        db.add(move)
+        try:
+            db.commit()
+            db.refresh(move)
+        except ValueError as e:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=str(e))
+        return move
+
+    # Check for sufficient stock if we are decreasing stock
+    if quantity_difference < 0:
+        if current_stock < abs(quantity_difference):
+            raise HTTPException(status_code=400, detail="Insufficient stock for adjustment")
+
+    # Generate reference
+    ref = generate_reference(db, models.DocType.ADJUSTMENT)
+
+    # Create movement record
+    move = models.StockMovement(
+        document_type=models.DocType.ADJUSTMENT,
+        status=models.MoveStatus.DONE,  # Adjustments are completed immediately
+        reference=ref,
+        product_id=payload.product_id,
+        quantity=abs(quantity_difference),  # Store positive quantity
+        source_location_id=location_id if quantity_difference < 0 else None,
+        dest_location_id=location_id if quantity_difference > 0 else None,
+        responsible_id=current_user.id
+    )
+    db.add(move)
+    try:
+        db.commit()
+        db.refresh(move)
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    return move
 
 
 # Note: The validation endpoints for transfers and adjustments are not required as they are completed immediately.

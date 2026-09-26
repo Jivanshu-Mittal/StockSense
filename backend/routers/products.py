@@ -93,13 +93,39 @@ def create_product(
 
     # kick off the opening stock as a receipt movement
     if payload.initial_stock > 0:
-        db.add(models.StockMovement(
+        # Find the first physical location for the initial stock
+        location = db.query(models.WarehouseLocation).filter(models.WarehouseLocation.is_virtual == False).first()
+        if not location:
+            raise HTTPException(status_code=404, detail="No physical location found for initial stock")
+
+        # Generate a reference for the initial stock receipt (WH/IN/####)
+        last_move = db.query(models.StockMovement)\
+            .filter(models.StockMovement.reference.like(f"WH/IN/%"))\
+            .order_by(models.StockMovement.id.desc())\
+            .first()
+        if last_move:
+            try:
+                last_num = int(last_move.reference.split('/')[-1])
+            except (ValueError, IndexError):
+                last_num = 0
+            new_num = last_num + 1
+        else:
+            new_num = 1
+        ref = f"WH/IN/{new_num:04d}"
+
+        # Create the receipt movement
+        move = models.StockMovement(
             document_type=models.DocType.RECEIPT,
             status=models.MoveStatus.DONE,
+            reference=ref,
             product_id=p.id,
-            quantity=payload.initial_stock
-        ))
+            quantity=payload.initial_stock,
+            dest_location_id=location.id,
+            # source_location_id is left as NULL (virtual vendor)
+        )
+        db.add(move)
         db.commit()
+        db.refresh(move)
 
     data = p.__dict__.copy()
     data["current_stock"] = payload.initial_stock

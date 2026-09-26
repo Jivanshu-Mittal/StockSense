@@ -24,6 +24,11 @@ app.add_middleware(
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request, exc):
+    if isinstance(exc, ValueError):
+        return JSONResponse(
+            status_code=400,
+            content={"detail": str(exc)}
+        )
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error"},
