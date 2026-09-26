@@ -9,6 +9,8 @@ import {
   TextInput,
   Button,
   ActivityIndicator,
+  Pressable,
+  RefreshControl,
 } from 'react-native';
 import { apiClient } from '../api/client';
 import { useAuthStore } from '../store/authStore';
@@ -16,8 +18,8 @@ import { StatusBadge } from '../components/StatusBadge';
 
 export const DeliveryScreen = () => {
   const { isAuthenticated } = useAuthStore();
-  const [deliveries, setDeliveries] = useState([]);
-  const [products, setProducts] = useState([]);
+  const [deliveries, setDeliveries] = useState<any[]>([]);
+  const [products, setProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [createModalVisible, setCreateModalVisible] = useState(false);
@@ -257,7 +259,7 @@ export const DeliveryScreen = () => {
         visible={createModalVisible}
         animationType="slide"
       >
-        <View style={styles.modalBackdrop} onPress={() => setCreateModalVisible(false)} />
+        <Pressable style={styles.modalBackdrop} onPress={() => setCreateModalVisible(false)} />
         <View style={styles.modalContent}>
           <Text style={styles.modalTitle}>New Delivery</Text>
           <View style={styles.modalForm}>

@@ -6,6 +6,7 @@ import {
   FlatList,
   TextInput,
   ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { apiClient } from '../api/client';
 import { useAuthStore } from '../store/authStore';
@@ -13,8 +14,8 @@ import { StatusBadge } from '../components/StatusBadge';
 
 export const ProductInventoryScreen = () => {
   const { isAuthenticated } = useAuthStore();
-  const [products, setProducts] = useState([]);
-  const [filteredProducts, setFilteredProducts] = useState([]);
+  const [products, setProducts] = useState<any[]>([]);
+  const [filteredProducts, setFilteredProducts] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);

@@ -20,7 +20,7 @@ export const AuthScreen = () => {
   const [loading, setLoading] = useState(false);
 
   // Password reset states
-  const [resetStep, setResetStep] = useState<'email' | 'otp' | 'password'>('email');
+  const [resetStep, setResetStep] = useState<'email' | 'otp' | 'password' | null>(null);
   const [resetEmail, setResetEmail] = useState('');
   const [otp, setOtp] = useState('');
   const [newPassword, setNewPassword] = useState('');

@@ -6,6 +6,7 @@ import {
   StyleSheet,
   Modal,
   FlatList,
+  Pressable,
 } from 'react-native';
 
 interface FilterDropdownProps<T> {
@@ -17,7 +18,7 @@ interface FilterDropdownProps<T> {
   placeholder?: string;
 }
 
-export const FilterDropdown = <T>({
+export const FilterDropdown = <T,>({
   label,
   options,
   selectedOption,
@@ -59,7 +60,7 @@ export const FilterDropdown = <T>({
         animationType="slide"
         style={styles.modalContainer}
       >
-        <View style={styles.modalBackdrop} onPress={toggleModal} />
+        <Pressable style={styles.modalBackdrop} onPress={toggleModal} />
         <View style={styles.modalContent}>
           <Text style={styles.modalHeader}>{label}</Text>
           <FlatList

@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     # restrict this in .env: e.g. "http://localhost:3000,https://yourapp.com"
-    BACKEND_CORS_ORIGINS: str = "http://localhost:3000,http://localhost:8081,http://localhost:19006"
+    BACKEND_CORS_ORIGINS: str = "http://localhost:3000,http://localhost:8081,http://localhost:8082,http://localhost:19006,http://127.0.0.1:8081,http://127.0.0.1:8082"
 
     class Config:
         env_file = ".env"

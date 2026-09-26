@@ -13,7 +13,20 @@ import { KPICard } from '../components/KPICard';
 import { FilterDropdown } from '../components/FilterDropdown';
 
 // Define enum types for dropdowns
-const DOCUMENT_TYPES = [
+type DocumentType = 'all' | 'receipt' | 'delivery' | 'internal' | 'adjustment';
+type Status = 'all' | 'draft' | 'waiting' | 'ready' | 'done' | 'canceled';
+type FilterOption<T extends string> = { value: T; label: string };
+type Location = { id: number; name: string; is_virtual?: boolean };
+type LocationFilterOption = { id: number | null; name: string };
+type DashboardKpis = {
+  total_products_in_stock: number;
+  low_stock_out_of_stock_count: number;
+  pending_receipts_count: number;
+  pending_deliveries_count: number;
+  scheduled_internal_transfers_count: number;
+};
+
+const DOCUMENT_TYPES: FilterOption<DocumentType>[] = [
   { value: 'all', label: 'All Types' },
   { value: 'receipt', label: 'Receipt' },
   { value: 'delivery', label: 'Delivery' },
@@ -21,7 +34,7 @@ const DOCUMENT_TYPES = [
   { value: 'adjustment', label: 'Adjustment' },
 ];
 
-const STATUSES = [
+const STATUSES: FilterOption<Status>[] = [
   { value: 'all', label: 'All Statuses' },
   { value: 'draft', label: 'Draft' },
   { value: 'waiting', label: 'Waiting' },
@@ -32,11 +45,11 @@ const STATUSES = [
 
 export const DashboardScreen = () => {
   const { isAuthenticated } = useAuthStore();
-  const [kpis, setKpis] = useState(null);
-  const [locations, setLocations] = useState([]); // for location filter dropdown
-  const [categories, setCategories] = useState([]); // for category filter dropdown
-  const [selectedDocType, setSelectedDocType] = useState<'all' | 'receipt' | 'delivery' | 'internal' | 'adjustment'>('all');
-  const [selectedStatus, setSelectedStatus] = useState<'all' | 'draft' | 'waiting' | 'ready' | 'done' | 'canceled'>('all');
+  const [kpis, setKpis] = useState<DashboardKpis | null>(null);
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [selectedDocType, setSelectedDocType] = useState(DOCUMENT_TYPES[0]);
+  const [selectedStatus, setSelectedStatus] = useState(STATUSES[0]);
   const [selectedLocation, setSelectedLocation] = useState<number | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -104,6 +117,15 @@ export const DashboardScreen = () => {
     );
   }
 
+  const locationOptions: LocationFilterOption[] = [
+    { id: null, name: 'All Locations' },
+    ...locations,
+  ];
+  const selectedLocationOption =
+    locationOptions.find((location) => location.id === selectedLocation) ?? locationOptions[0];
+  const categoryOptions = ['All Categories', ...categories];
+  const selectedCategoryOption = selectedCategory ?? 'All Categories';
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -114,41 +136,29 @@ export const DashboardScreen = () => {
             label="Document Type"
             options={DOCUMENT_TYPES}
             selectedOption={selectedDocType}
-            onOptionSelect={setSelectedDocType}
+            onOptionSelect={(option) => setSelectedDocType(option)}
             renderOption={(option) => option.label}
           />
           <FilterDropdown
             label="Status"
             options={STATUSES}
             selectedOption={selectedStatus}
-            onOptionSelect={setSelectedStatus}
+            onOptionSelect={(option) => setSelectedStatus(option)}
             renderOption={(option) => option.label}
           />
           <FilterDropdown
             label="Location"
-            options={locations}
-            selectedOption={selectedLocation ? { value: selectedLocation, label: locations.find(loc => loc.id === selectedLocation)?.name || '' } : { value: null, label: 'All Locations' } as any>
-            onOptionSelect={(option) => {
-              if (option.value === null) {
-                setSelectedLocation(null);
-              } else {
-                setSelectedLocation(option.value);
-              }
-            }}
-            renderOption={(option) => option.label || 'All Locations'}
+            options={locationOptions}
+            selectedOption={selectedLocationOption}
+            onOptionSelect={(option) => setSelectedLocation(option.id)}
+            renderOption={(option) => option.name}
           />
           <FilterDropdown
             label="Category"
-            options={categories}
-            selectedOption={selectedCategory ? { value: selectedCategory, label: selectedCategory } : { value: null, label: 'All Categories' } as any>
-            onOptionSelect={(option) => {
-              if (option.value === null) {
-                setSelectedCategory(null);
-              } else {
-                setSelectedCategory(option.value);
-              }
-            }}
-            renderOption={(option) => option.label || 'All Categories'}
+            options={categoryOptions}
+            selectedOption={selectedCategoryOption}
+            onOptionSelect={(option) => setSelectedCategory(option === 'All Categories' ? null : option)}
+            renderOption={(option) => option}
           />
         </View>
       </View>
@@ -166,7 +176,7 @@ export const DashboardScreen = () => {
 
       {/* TODO: Add movements list or charts based on filters */}
       <View style={styles.content}>
-        <Text style={styles.placeholderText>Movements list will be shown here based on filters</Text>
+        <Text style={styles.placeholderText}>Movements list will be shown here based on filters</Text>
       </View>
     </View>
   );

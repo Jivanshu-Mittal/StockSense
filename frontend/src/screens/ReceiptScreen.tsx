@@ -9,6 +9,8 @@ import {
   TextInput,
   Button,
   ActivityIndicator,
+  Pressable,
+  RefreshControl,
 } from 'react-native';
 import { apiClient } from '../api/client';
 import { useAuthStore } from '../store/authStore';
@@ -16,8 +18,8 @@ import { StatusBadge } from '../components/StatusBadge';
 
 export const ReceiptScreen = () => {
   const { isAuthenticated } = useAuthStore();
-  const [receipts, setReceipts] = useState([]);
-  const [products, setProducts] = useState([]);
+  const [receipts, setReceipts] = useState<any[]>([]);
+  const [products, setProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [createModalVisible, setCreateModalVisible] = useState(false);
@@ -170,7 +172,7 @@ export const ReceiptScreen = () => {
         visible={createModalVisible}
         animationType="slide"
       >
-        <View style={styles.modalBackdrop} onPress={() => setCreateModalVisible(false)} />
+        <Pressable style={styles.modalBackdrop} onPress={() => setCreateModalVisible(false)} />
         <View style={styles.modalContent}>
           <Text style={styles.modalTitle}>New Receipt</Text>
           <View style={styles.modalForm}>

@@ -9,6 +9,8 @@ import {
   TextInput,
   Button,
   ActivityIndicator,
+  Pressable,
+  RefreshControl,
 } from 'react-native';
 import { apiClient } from '../api/client';
 import { useAuthStore } from '../store/authStore';
@@ -16,9 +18,9 @@ import { StatusBadge } from '../components/StatusBadge';
 
 export const AdjustmentScreen = () => {
   const { isAuthenticated } = useAuthStore();
-  const [adjustments, setAdjustments] = useState([]);
-  const [products, setProducts] = useState([]);
-  const [locations, setLocations] = useState([]);
+  const [adjustments, setAdjustments] = useState<any[]>([]);
+  const [products, setProducts] = useState<any[]>([]);
+  const [locations, setLocations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [createModalVisible, setCreateModalVisible] = useState(false);
@@ -188,7 +190,7 @@ export const AdjustmentScreen = () => {
         visible={createModalVisible}
         animationType="slide"
       >
-        <View style={styles.modalBackdrop} onPress={() => setCreateModalVisible(false)} />
+        <Pressable style={styles.modalBackdrop} onPress={() => setCreateModalVisible(false)} />
         <View style={styles.modalContent}>
           <Text style={styles.modalTitle}>New Adjustment</Text>
           <View style={styles.modalForm}>
