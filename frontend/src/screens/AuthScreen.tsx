@@ -18,6 +18,8 @@ export const AuthScreen = () => {
   const [password, setPassword] = useState('');
   const [isLogin, setIsLogin] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [authMessage, setAuthMessage] = useState('');
+  const [authMessageType, setAuthMessageType] = useState<'success' | 'error' | null>(null);
 
   // Password reset states
   const [resetStep, setResetStep] = useState<'email' | 'otp' | 'password' | null>(null);
@@ -32,8 +34,18 @@ export const AuthScreen = () => {
   const login = useAuthStore(state => state.login);
 
   const handleSubmit = async () => {
+    setAuthMessage('');
+    setAuthMessageType(null);
+
     if (!email || !password) {
-      Alert.alert('Error', 'Please fill in all fields');
+      setAuthMessage('Please fill in both email and password.');
+      setAuthMessageType('error');
+      return;
+    }
+
+    if (!isLogin && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 8)) {
+      setAuthMessage('Enter a valid email address and a password with at least 8 characters.');
+      setAuthMessageType('error');
       return;
     }
 
@@ -54,15 +66,18 @@ export const AuthScreen = () => {
       } else {
         // Signup expects JSON payload
         await apiClient.post('/auth/signup', { email, password });
-        Alert.alert('Success', 'Account created! Please log in.', [
-          { text: 'OK', onPress: () => setIsLogin(true) }
-        ]);
+        setIsLogin(true);
+        setPassword('');
+        setAuthMessage('Account created. Please sign in with your new account.');
+        setAuthMessageType('success');
       }
     } catch (error: any) {
-      const msg = error.response?.data?.detail || 'An error occurred';
-      // Handle FastAPI validation error formatting (arrays)
-      const displayMsg = Array.isArray(msg) ? msg[0].msg : msg;
-      Alert.alert('Error', displayMsg);
+      const detail = error.response?.data?.detail;
+      const displayMsg = Array.isArray(detail)
+        ? detail.map((item: { msg?: string }) => item.msg || 'Invalid input').join(' ')
+        : detail || 'Unable to complete the request. Please try again.';
+      setAuthMessage(displayMsg);
+      setAuthMessageType('error');
     } finally {
       setLoading(false);
     }
@@ -133,6 +148,12 @@ export const AuthScreen = () => {
             {isLogin ? 'Welcome back!' : 'Create your account'}
           </Text>
 
+          {authMessage ? (
+            <View style={[styles.authMessage, authMessageType === 'success' ? styles.authMessageSuccess : styles.authMessageError]}>
+              <Text style={[styles.authMessageText, authMessageType === 'success' && styles.authMessageSuccessText]}>{authMessage}</Text>
+            </View>
+          ) : null}
+
           <TextInput
             style={styles.input}
             placeholder="Email address"
@@ -168,7 +189,11 @@ export const AuthScreen = () => {
 
           <TouchableOpacity
             style={styles.switchMode}
-            onPress={() => setIsLogin(!isLogin)}
+            onPress={() => {
+              setIsLogin(!isLogin);
+              setAuthMessage('');
+              setAuthMessageType(null);
+            }}
           >
             <Text style={styles.switchModeText}>
               {isLogin
@@ -373,6 +398,23 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     textAlign: 'center',
     marginBottom: 32,
+  },
+  authMessage: {
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 16,
+  },
+  authMessageSuccess: {
+    backgroundColor: '#dcfce7',
+  },
+  authMessageError: {
+    backgroundColor: '#fee2e2',
+  },
+  authMessageText: {
+    color: '#991b1b',
+  },
+  authMessageSuccessText: {
+    color: '#15803d',
   },
   input: {
     backgroundColor: '#f9fafb',
