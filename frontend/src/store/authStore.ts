@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import * as SecureStore from 'expo-secure-store';
+import { Platform } from 'react-native';
 
 interface AuthState {
   token: string | null;
@@ -16,18 +17,31 @@ export const useAuthStore = create<AuthState>((set) => ({
   isLoading: true, // true by default until we check secure store on app boot
   
   login: async (token: string) => {
-    await SecureStore.setItemAsync('userToken', token);
+    if (Platform.OS === 'web') {
+      localStorage.setItem('userToken', token);
+    } else {
+      await SecureStore.setItemAsync('userToken', token);
+    }
     set({ token, isAuthenticated: true });
   },
   
   logout: async () => {
-    await SecureStore.deleteItemAsync('userToken');
+    if (Platform.OS === 'web') {
+      localStorage.removeItem('userToken');
+    } else {
+      await SecureStore.deleteItemAsync('userToken');
+    }
     set({ token: null, isAuthenticated: false });
   },
   
   restoreToken: async () => {
     try {
-      const token = await SecureStore.getItemAsync('userToken');
+      let token = null;
+      if (Platform.OS === 'web') {
+        token = localStorage.getItem('userToken');
+      } else {
+        token = await SecureStore.getItemAsync('userToken');
+      }
       if (token) {
         set({ token, isAuthenticated: true, isLoading: false });
       } else {
