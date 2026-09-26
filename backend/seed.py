@@ -1,4 +1,6 @@
 import logging
+import os
+import secrets
 
 from faker import Faker
 
@@ -21,18 +23,34 @@ def seed_db():
 
         log.info("creating admin + 99 test users...")
 
+        # Get admin password from environment or generate secure one
+        admin_password = os.environ.get("ADMIN_PASSWORD")
+        if not admin_password:
+            # Generate a secure random password for admin
+            admin_password = secrets.token_urlsafe(16)
+            log.warning(
+                "ADMIN_PASSWORD not set in environment. "
+                f"Generated secure admin password: {admin_password}"
+            )
+
+        # Create admin user as inventory manager
         db.add(models.User(
             email="admin@stocksense.com",
-            hashed_password=get_password_hash("admin123"),
+            hashed_password=get_password_hash(admin_password),
+            role=models.UserRole.INVENTORY_MANAGER
         ))
 
-        users = [
-            models.User(
+        # Create test users with random passwords
+        users = []
+        for i in range(99):
+            # Generate random password for each test user
+            random_password = secrets.token_urlsafe(16)
+            users.append(models.User(
                 email=fake.unique.email(),
-                hashed_password=get_password_hash("password123"),
-            )
-            for _ in range(99)
-        ]
+                hashed_password=get_password_hash(random_password),
+                role=models.UserRole.WAREHOUSE_STAFF
+            ))
+
         db.bulk_save_objects(users)
         db.commit()
         log.info("done. 100 users created")

@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field
@@ -50,12 +50,68 @@ class StockMovementCreate(BaseModel):
     quantity: float
     source_location_id: Optional[int] = None
     dest_location_id: Optional[int] = None
+    partner_name: Optional[str] = None
+    contact_email: Optional[str] = None
+    reference_code: Optional[str] = None
 
 
 class StockMovementResponse(StockMovementCreate):
     id: int
     status: MoveStatus
     created_at: datetime
+
+
+class ReceiptCreate(BaseModel):
+    product_id: int
+    quantity: float
+    partner_name: str
+    contact_email: str
+    reference_code: str
+    schedule_date: Optional[datetime] = None
+
+
+class DeliveryCreate(BaseModel):
+    product_id: int
+    quantity: float
+    partner_name: str
+    contact_email: str
+    reference_code: str
+    schedule_date: Optional[datetime] = None
+
+
+class TransferCreate(BaseModel):
+    product_id: int
+    quantity: float
+    source_location_id: int
+    dest_location_id: int
+    schedule_date: Optional[datetime] = None
+
+
+class AdjustmentCreate(BaseModel):
+    product_id: int
+    quantity: float  # positive for increase, negative for decrease
+    source_location_id: Optional[int] = None  # location to adjust from (if decreasing)
+    dest_location_id: Optional[int] = None    # location to adjust to (if increasing)
+    # For adjustments, one of source_location_id or dest_location_id should be None/virtual
+
+    class Config:
+        from_attributes = True
+
+
+class ProductStockBreakdown(BaseModel):
+    location_id: int
+    location_name: str
+    quantity: float
+
+
+class ProductListResponse(BaseModel):
+    id: int
+    name: str
+    sku: str
+    category: str
+    unit_of_measure: str
+    current_stock: float
+    stock_by_location: List[ProductStockBreakdown]
 
     class Config:
         from_attributes = True

@@ -1,8 +1,6 @@
-from typing import List
-
-from fastapi import APIRouter, Depends, HTTPException
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-
 import models
 import schemas
 from database import get_db
@@ -11,38 +9,75 @@ from dependencies import get_current_user
 router = APIRouter(prefix="/products", tags=["products"])
 
 
-def _calc_stock(db: Session, product_id: int) -> float:
-    """add up all completed movements to get current qty"""
-    moves = db.query(models.StockMovement).filter(
-        models.StockMovement.product_id == product_id,
-        models.StockMovement.status == models.MoveStatus.DONE
-    ).all()
-
-    qty = 0.0
-    for m in moves:
-        if m.document_type == models.DocType.RECEIPT:
-            qty += m.quantity
-        elif m.document_type == models.DocType.DELIVERY:
-            qty -= m.quantity
-        elif m.document_type == models.DocType.ADJUSTMENT:
-            qty += m.quantity
-        # internal transfers don't affect total qty
-    return qty
+def _calc_total_stock(db: Session, product_id: int) -> float:
+    """Calculate total stock across all locations for a product."""
+    total = db.query(models.StockQuant).filter(
+        models.StockQuant.product_id == product_id
+    ).with_entities(models.StockQuant.quantity).all()
+    return sum(q.quantity for q in total) if total else 0.0
 
 
-@router.get("/", response_model=List[schemas.ProductResponse])
-def list_products(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    products = db.query(models.Product).offset(skip).limit(limit).all()
+def _get_stock_by_location(db: Session, product_id: int) -> List[dict]:
+    """Get stock breakdown by location for a product."""
+    quants = db.query(models.StockQuant, models.WarehouseLocation)\
+        .join(models.WarehouseLocation, models.StockQuant.location_id == models.WarehouseLocation.id)\
+        .filter(models.StockQuant.product_id == product_id)\
+        .all()
+
+    breakdown = []
+    for quant, location in quants:
+        breakdown.append({
+            "location_id": location.id,
+            "location_name": location.name,
+            "quantity": quant.quantity
+        })
+    return breakdown
+
+
+@router.get("/", response_model=List[schemas.ProductListResponse])
+def list_products(
+    skip: int = 0,
+    limit: int = 100,
+    search: Optional[str] = Query(None, description="Search by SKU"),
+    category: Optional[str] = Query(None, description="Filter by category"),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """List products with optional search and stock breakdown by location."""
+    query = db.query(models.Product)
+
+    if search:
+        query = query.filter(models.Product.sku.ilike(f"%{search}%"))
+    if category:
+        query = query.filter(models.Product.category == category)
+
+    products = query.offset(skip).limit(limit).all()
+
     result = []
-    for p in products:
-        data = p.__dict__.copy()
-        data["current_stock"] = _calc_stock(db, p.id)
-        result.append(data)
+    for product in products:
+        total_stock = _calc_total_stock(db, product.id)
+        stock_breakdown = _get_stock_by_location(db, product.id)
+
+        product_dict = {
+            "id": product.id,
+            "name": product.name,
+            "sku": product.sku,
+            "category": product.category,
+            "unit_of_measure": product.unit_of_measure,
+            "current_stock": total_stock,
+            "stock_by_location": stock_breakdown
+        }
+        result.append(product_dict)
+
     return result
 
 
 @router.post("/", response_model=schemas.ProductResponse)
-def create_product(payload: schemas.ProductCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+def create_product(
+    payload: schemas.ProductCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
     if db.query(models.Product).filter(models.Product.sku == payload.sku).first():
         raise HTTPException(status_code=400, detail="SKU already exists")
 
@@ -69,3 +104,13 @@ def create_product(payload: schemas.ProductCreate, db: Session = Depends(get_db)
     data = p.__dict__.copy()
     data["current_stock"] = payload.initial_stock
     return data
+
+
+@router.get("/categories", response_model=List[str])
+def get_categories(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """Get distinct product categories."""
+    categories = db.query(models.Product.category).distinct().all()
+    return [cat[0] for cat in categories if cat[0] is not None]

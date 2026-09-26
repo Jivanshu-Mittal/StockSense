@@ -1,0 +1,100 @@
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+from sqlalchemy import or_, and_, func
+from datetime import datetime
+import models
+from database import get_db
+from dependencies import get_current_user
+
+router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+
+
+@router.get("/kpis")
+def get_dashboard_kpis(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """Return key performance indicators for the dashboard."""
+    # Total products in stock: count of products with positive total stock
+    # We'll compute by checking if there's any stock quant with quantity > 0 for the product
+    total_products_in_stock = db.query(models.Product.id)\
+        .join(models.StockQuant, models.Product.id == models.StockQuant.product_id)\
+        .filter(models.StockQuant.quantity > 0)\
+        .distinct()\
+        .count()
+
+    # Low stock and out-of-stock items
+    # Low stock: product has stock > 0 but <= min_stock_level
+    # Out-of-stock: product has no stock (total stock == 0) or all stock quants are zero?
+    # We'll compute total stock per product and then compare with min_stock_level
+    # We'll do a subquery for total stock per product
+    from sqlalchemy import func, case, and_
+
+    # Subquery for total stock per product
+    stock_subq = db.query(
+        models.StockQuant.product_id.label('product_id'),
+        func.sum(models.StockQuant.quantity).label('total_stock')
+    ).group_by(models.StockQuant.product_id).subquery()
+
+    # Products with low stock or out of stock
+    low_or_out_of_stock = db.query(models.Product)\
+        .outerjoin(stock_subq, models.Product.id == stock_subq.c.product_id)\
+        .filter(
+            # Out of stock: total_stock is NULL (no stock quant) or total_stock == 0
+            or_(
+                stock_subq.c.total_stock.is_(None),
+                stock_subq.c.total_stock == 0,
+                # Low stock: total_stock > 0 and total_stock <= min_stock_level
+                and_(
+                    stock_subq.c.total_stock > 0,
+                    stock_subq.c.total_stock <= models.Product.min_stock_level
+                )
+            )
+        )\
+        .count()
+
+    # Pending receipts: receipt movements not done or canceled
+    pending_receipts = db.query(models.StockMovement)\
+        .filter(
+            models.StockMovement.document_type == models.DocType.RECEIPT,
+            models.StockMovement.status.in_([
+                models.MoveStatus.DRAFT,
+                models.MoveStatus.WAITING,
+                models.MoveStatus.READY
+            ])
+        )\
+        .count()
+
+    # Pending deliveries: delivery movements not done or canceled
+    pending_deliveries = db.query(models.StockMovement)\
+        .filter(
+            models.StockMovement.document_type == models.DocType.DELIVERY,
+            models.StockMovement.status.in_([
+                models.MoveStatus.DRAFT,
+                models.MoveStatus.WAITING,
+                models.MoveStatus.READY
+            ])
+        )\
+        .count()
+
+    # Scheduled internal transfers: internal movements with future schedule_date and not done/canceled
+    now = datetime.utcnow()
+    scheduled_transfers = db.query(models.StockMovement)\
+        .filter(
+            models.StockMovement.document_type == models.DocType.INTERNAL,
+            models.StockMovement.schedule_date >= now,
+            models.StockMovement.status.in_([
+                models.MoveStatus.DRAFT,
+                models.MoveStatus.WAITING,
+                models.MoveStatus.READY
+            ])
+        )\
+        .count()
+
+    return {
+        "total_products_in_stock": total_products_in_stock,
+        "low_stock_out_of_stock_count": low_or_out_of_stock,
+        "pending_receipts_count": pending_receipts,
+        "pending_deliveries_count": pending_deliveries,
+        "scheduled_internal_transfers_count": scheduled_transfers
+    }
