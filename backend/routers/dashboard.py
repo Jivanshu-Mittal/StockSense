@@ -25,9 +25,7 @@ def get_dashboard_kpis(
         models.WarehouseLocation.is_virtual == False
     ).scalar() or 0
 
-    # Low stock count: Count of products where total stock <= min_stock_level
-    # We'll compute total stock per product and then compare with min_stock_level
-    # We'll do a subquery for total stock per product (only physical locations)
+    # Subquery for total stock per product in physical locations
     stock_subq = db.query(
         models.StockQuant.product_id.label('product_id'),
         func.sum(models.StockQuant.quantity).label('total_stock')
@@ -38,17 +36,24 @@ def get_dashboard_kpis(
         models.WarehouseLocation.is_virtual == False
     ).group_by(models.StockQuant.product_id).subquery()
 
-    # Products with low stock (total stock <= min_stock_level and total stock > 0)
-    # Note: We only count as low stock if there is some stock but it's at or below min level
-    # Out-of-stock (total stock == 0) is not counted in low_stock_count per Excalidraw spec
-    low_stock_count = db.query(models.Product)\
+    # Low stock or out of stock count:
+    # - Out of stock: total_stock is NULL (no stock in physical locations) or 0
+    # - Low stock: 0 < total_stock <= min_stock_level
+    low_stock_out_of_stock_count = db.query(models.Product)\
         .outerjoin(stock_subq, models.Product.id == stock_subq.c.product_id)\
         .filter(
-            # Low stock: total_stock > 0 and total_stock <= min_stock_level
-            and_(
-                stock_subq.c.total_stock.isnot(None),
-                stock_subq.c.total_stock > 0,
-                stock_subq.c.total_stock <= models.Product.min_stock_level
+            or_(
+                # Out of stock: total_stock is NULL or 0
+                or_(
+                    stock_subq.c.total_stock.is_(None),
+                    stock_subq.c.total_stock == 0
+                ),
+                # Low stock: total_stock > 0 and total_stock <= min_stock_level
+                and_(
+                    stock_subq.c.total_stock.isnot(None),
+                    stock_subq.c.total_stock > 0,
+                    stock_subq.c.total_stock <= models.Product.min_stock_level
+                )
             )
         )\
         .count()
@@ -78,7 +83,7 @@ def get_dashboard_kpis(
         .count()
 
     # Internal transfers scheduled: count of internal transfers not yet marked `done`
-    internal_transfers_scheduled = db.query(models.StockMovement)\
+    scheduled_internal_transfers_count = db.query(models.StockMovement)\
         .filter(
             models.StockMovement.document_type == models.DocType.INTERNAL,
             models.StockMovement.status != models.MoveStatus.DONE,
@@ -88,8 +93,8 @@ def get_dashboard_kpis(
 
     return {
         "total_products_in_stock": int(total_products_in_stock),
-        "low_stock_count": low_stock_count,
+        "low_stock_out_of_stock_count": low_stock_out_of_stock_count,
         "pending_receipts_count": pending_receipts,
         "pending_deliveries_count": pending_deliveries,
-        "internal_transfers_scheduled": internal_transfers_scheduled
+        "scheduled_internal_transfers_count": scheduled_internal_transfers_count
     }

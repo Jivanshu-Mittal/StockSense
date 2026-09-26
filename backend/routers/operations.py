@@ -66,9 +66,9 @@ def list_movements(
     if end_date:
         query = query.filter(models.StockMovement.created_at <= end_date)
     if product_id:
+        query = query.filter(models.StockMovement.product_id == product_id)
     if category:
         query = query.join(models.Product).filter(models.Product.category == category)
-        query = query.filter(models.StockMovement.product_id == product_id)
 
     return query.offset(skip).limit(limit).all()
 
@@ -116,6 +116,13 @@ def create_receipt(
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
 
+    # Validate destination location exists and is physical
+    dest_location = db.query(models.WarehouseLocation).filter(models.WarehouseLocation.id == payload.dest_location_id).first()
+    if not dest_location:
+        raise HTTPException(status_code=404, detail="Destination location not found")
+    if dest_location.is_virtual:
+        raise HTTPException(status_code=400, detail="Destination location must be physical for receipts")
+
     # Generate reference
     ref = generate_reference(db, models.DocType.RECEIPT)
 
@@ -130,18 +137,45 @@ def create_receipt(
         contact_email=payload.contact_email,
         reference_code=payload.reference_code,
         schedule_date=payload.schedule_date,
+        dest_location_id=payload.dest_location_id,
         responsible_id=current_user.id
-        # For receipts, source_location is virtual (vendor) - we can leave source_location_id as NULL
-        # dest_location should be set? The ReceiptCreate doesn't have location.
-        # According to the model, receipts typically have a dest_location (where stock arrives) and source_location is virtual.
-        # But the ReceiptCreate schema doesn't include location. We'll assume the destination is the default stock location?
-        # However, the user didn't specify. We'll leave dest_location_id as NULL for now and rely on the schema.
-        # Alternatively, we can adjust the schema to include location. But let's stick to the given schema.
+        # source_location_id is left as NULL (virtual vendor)
     )
     db.add(move)
     db.commit()
     db.refresh(move)
     return move
+
+
+@router.post("/receipts/{receipt_id}/validate", response_model=schemas.StockMovementResponse)
+def validate_receipt(
+    receipt_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_inventory_manager_user)
+):
+    """Validate a receipt: ensure it is ready and destination location is physical."""
+    # Get the receipt movement
+    receipt = db.query(models.StockMovement).filter(models.StockMovement.id == receipt_id).first()
+    if not receipt:
+        raise HTTPException(status_code=404, detail="Receipt not found")
+    if receipt.document_type != models.DocType.RECEIPT:
+        raise HTTPException(status_code=400, detail="Not a receipt document")
+    if receipt.status != models.MoveStatus.DONE:
+        raise HTTPException(status_code=400, detail=f"Receipt must be in DONE status to validate, got {receipt.status}")
+
+    # Validate destination location exists and is physical
+    dest_location = db.query(models.WarehouseLocation).filter(models.WarehouseLocation.id == receipt.dest_location_id).first()
+    if not dest_location:
+        raise HTTPException(status_code=404, detail="Destination location not found")
+    if dest_location.is_virtual:
+        raise HTTPException(status_code=400, detail="Destination location must be physical for receipts")
+
+    # Note: Stock quant update is handled by the event listener after the movement is created.
+    # We do not need to update stock here.
+
+    db.commit()
+    db.refresh(receipt)
+    return receipt
 
 
 @router.post("/deliveries", response_model=schemas.StockMovementResponse)
@@ -155,6 +189,13 @@ def create_delivery(
     product = db.query(models.Product).filter(models.Product.id == payload.product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
+
+    # Validate source location exists and is physical
+    source_location = db.query(models.WarehouseLocation).filter(models.WarehouseLocation.id == payload.source_location_id).first()
+    if not source_location:
+        raise HTTPException(status_code=404, detail="Source location not found")
+    if source_location.is_virtual:
+        raise HTTPException(status_code=400, detail="Source location must be physical for deliveries")
 
     # Generate reference
     ref = generate_reference(db, models.DocType.DELIVERY)
@@ -170,9 +211,9 @@ def create_delivery(
         contact_email=payload.contact_email,
         reference_code=payload.reference_code,
         schedule_date=payload.schedule_date,
+        source_location_id=payload.source_location_id,
         responsible_id=current_user.id
-        # For deliveries, source_location is the warehouse (where stock comes from) and dest_location is virtual (customer)
-        # The DeliveryCreate schema doesn't include location. We'll leave both as NULL for now.
+        # dest_location_id is left as NULL (virtual customer)
     )
     db.add(move)
     db.commit()
@@ -244,13 +285,30 @@ def delivery_to_done(
     if move.status != models.MoveStatus.READY:
         raise HTTPException(status_code=400, detail=f"Cannot transition from {move.status} to done")
 
-    # When delivery is done, we need to reduce stock from source location
-    # For now, we assume the source location is set? Actually, we don't have location in the schema.
-    # We'll skip stock adjustment for now since the schema doesn't specify locations.
-    # In a real scenario, we would:
-    # 1. Decrease stock from source_location_id
-    # 2. Increase stock to a virtual location (or just remove from inventory)
-    # But since we don't have location info, we'll just mark as done.
+    # Check sufficient stock at source location (with lock to prevent race condition)
+    source_location_id = move.source_location_id
+    if not source_location_id:
+        raise HTTPException(status_code=400, detail="Delivery has no source location")
+
+    source_location = db.query(models.WarehouseLocation).filter(models.WarehouseLocation.id == source_location_id).first()
+    if not source_location:
+        raise HTTPException(status_code=404, detail="Source location not found")
+    if source_location.is_virtual:
+        raise HTTPException(status_code=400, detail="Source location must be physical for deliveries")
+
+    # Lock and check stock
+    stock_quant = db.query(models.StockQuant).filter(
+        models.StockQuant.product_id == move.product_id,
+        models.StockQuant.location_id == source_location_id
+    ).with_for_update().first()
+
+    if not stock_quant:
+        raise HTTPException(status_code=400, detail="Insufficient stock: no stock record found")
+    if stock_quant.quantity < move.quantity:
+        raise HTTPException(status_code=400, detail=f"Insufficient stock: available {stock_quant.quantity}, needed {move.quantity}")
+
+    # Note: Stock quant update will be handled by the event listener after status update.
+    # We do not update stock here.
 
     move.status = models.MoveStatus.DONE
     db.commit()
@@ -302,6 +360,11 @@ def create_transfer(
         raise HTTPException(status_code=404, detail="Destination location not found")
     if payload.source_location_id == payload.dest_location_id:
         raise HTTPException(status_code=400, detail="Source and destination locations must be different")
+    # Ensure both locations are physical
+    if source_loc.is_virtual:
+        raise HTTPException(status_code=400, detail="Source location must be physical for transfers")
+    if dest_loc.is_virtual:
+        raise HTTPException(status_code=400, detail="Destination location must be physical for transfers")
 
     # Generate reference
     ref = generate_reference(db, models.DocType.INTERNAL)
@@ -321,43 +384,8 @@ def create_transfer(
     db.add(move)
     db.commit()
     db.refresh(move)
-
-    # Update stock quants: decrease from source, increase to destination
-    # Decrease source
-    source_quant = db.query(models.StockQuant).filter(
-        models.StockQuant.product_id == payload.product_id,
-        models.StockQuant.location_id == payload.source_location_id
-    ).first()
-    if source_quant:
-        if source_quant.quantity < payload.quantity:
-            raise HTTPException(status_code=400, detail="Insufficient stock at source location")
-        source_quant.quantity -= payload.quantity
-    else:
-        # Create new quant with negative? Actually, we should not allow transfer if no stock exists.
-        raise HTTPException(status_code=400, detail="No stock record at source location")
-
-    # Increase destination
-    dest_quant = db.query(models.StockQuant).filter(
-        models.StockQuant.product_id == payload.product_id,
-        models.StockQuant.location_id == payload.dest_location_id
-    ).first()
-    if dest_quant:
-        dest_quant.quantity += payload.quantity
-    else:
-        # Create new stock quant
-        dest_quant = models.StockQuant(
-            product_id=payload.product_id,
-            location_id=payload.dest_location_id,
-            quantity=payload.quantity
-        )
-        db.add(dest_quant)
-
-    db.commit()
-    db.refresh(move)
     return move
 
-
-@router.post("/adjustments", response_model=schemas.StockMovementResponse)
 
 @router.post("/adjustments", response_model=schemas.StockMovementResponse)
 def create_adjustment_reconciliation(
@@ -382,41 +410,13 @@ def create_adjustment_reconciliation(
 
     # Determine which location we're adjusting
     location_id = payload.source_location_id if payload.source_location_id else payload.dest_location_id
-    
-    # Validate location exists
+
+    # Validate location exists and is physical
     location = db.query(models.WarehouseLocation).filter(models.WarehouseLocation.id == location_id).first()
     if not location:
         raise HTTPException(status_code=404, detail="Location not found")
-    
-    # Get the current recorded stock for this product at this location
-    stock_quant = db.query(models.StockQuant).filter(
-        models.StockQuant.product_id == payload.product_id,
-        models.StockQuant.location_id == location_id
-    ).first()
-    
-    # If no stock record exists, assume current stock is 0
-    current_stock = stock_quant.quantity if stock_quant else 0.0
-    
-    # Calculate the difference: physical count - recorded stock
-    quantity_difference = payload.quantity - current_stock
-    
-    # If no difference, no adjustment needed
-    if quantity_difference == 0:
-        # Still create a movement record for audit trail, but with zero quantity
-        move = models.StockMovement(
-            document_type=models.DocType.ADJUSTMENT,
-            status=models.MoveStatus.DONE,
-            reference=generate_reference(db, models.DocType.ADJUSTMENT),
-            product_id=payload.product_id,
-            quantity=0.0,
-            source_location_id=payload.source_location_id,
-            dest_location_id=payload.dest_location_id,
-            responsible_id=current_user.id
-        )
-        db.add(move)
-        db.commit()
-        db.refresh(move)
-        return move
+    if location.is_virtual:
+        raise HTTPException(status_code=400, detail="Location must be physical for adjustments")
 
     # Generate reference
     ref = generate_reference(db, models.DocType.ADJUSTMENT)
@@ -427,142 +427,15 @@ def create_adjustment_reconciliation(
         status=models.MoveStatus.DONE,  # Adjustments are completed immediately
         reference=ref,
         product_id=payload.product_id,
-        quantity=abs(quantity_difference),  # Store positive quantity
-        source_location_id=payload.source_location_id if quantity_difference < 0 else None,
-        dest_location_id=payload.dest_location_id if quantity_difference > 0 else None,
+        quantity=abs(payload.quantity),  # Store positive quantity
+        source_location_id=payload.source_location_id if payload.quantity < 0 else None,
+        dest_location_id=payload.dest_location_id if payload.quantity > 0 else None,
         responsible_id=current_user.id
     )
     db.add(move)
     db.commit()
     db.refresh(move)
-
-    # Update stock quants based on the difference
-    if quantity_difference > 0:
-        # Physical count > recorded stock: increase stock
-        if stock_quant:
-            stock_quant.quantity += quantity_difference
-        else:
-            # Create new stock quant
-            stock_quant = models.StockQuant(
-                product_id=payload.product_id,
-                location_id=location_id,
-                quantity=quantity_difference
-            )
-            db.add(stock_quant)
-    else:
-        # Physical count < recorded stock: decrease stock
-        if not stock_quant:
-            raise HTTPException(status_code=400, detail="Insufficient stock for adjustment")
-        if stock_quant.quantity < abs(quantity_difference):
-            raise HTTPException(status_code=400, detail="Insufficient stock for adjustment")
-        stock_quant.quantity -= abs(quantity_difference)
-
-    db.commit()
-    db.refresh(move)
     return move
 
 
-
-
-@router.post("/receipts/validate", response_model=schemas.StockMovementResponse)
-def validate_receipt(
-    receipt_id: int,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_inventory_manager_user)
-):
-    """Validate a receipt: transition to done and increment destination StockQuant."""
-    # Get the receipt movement
-    receipt = db.query(models.StockMovement).filter(models.StockMovement.id == receipt_id).first()
-    if not receipt:
-        raise HTTPException(status_code=404, detail="Receipt not found")
-    if receipt.document_type != models.DocType.RECEIPT:
-        raise HTTPException(status_code=400, detail="Not a receipt document")
-    if receipt.status != models.MoveStatus.DONE:
-        raise HTTPException(status_code=400, detail=f"Receipt must be in DONE status to validate, got {receipt.status}")
-    
-    # For receipts, we increase stock at the destination location
-    if not receipt.dest_location_id:
-        raise HTTPException(status_code=400, detail="Receipt has no destination location")
-    
-    # Validate destination location exists and is physical
-    dest_location = db.query(models.WarehouseLocation).filter(models.WarehouseLocation.id == receipt.dest_location_id).first()
-    if not dest_location:
-        raise HTTPException(status_code=404, detail="Destination location not found")
-    if dest_location.is_virtual:
-        raise HTTPException(status_code=400, detail="Cannot validate receipt to virtual location")
-    
-    # Get or create StockQuant for the product at destination location
-    stock_quant = db.query(models.StockQuant).filter(
-        models.StockQuant.product_id == receipt.product_id,
-        models.StockQuant.location_id == receipt.dest_location_id
-    ).first()
-    
-    if not stock_quant:
-        # Create new stock quant
-        stock_quant = models.StockQuant(
-            product_id=receipt.product_id,
-            location_id=receipt.dest_location_id,
-            quantity=0.0
-        )
-        db.add(stock_quant)
-    
-    # Increase stock by the receipt quantity
-    stock_quant.quantity += receipt.quantity
-    
-    # Note: Receipt is already in DONE status from creation, so no status change needed
-    # But we'll keep it in DONE status for consistency
-    
-    db.commit()
-    db.refresh(receipt)
-    return receipt
-
-
-@router.post("/deliveries/validate", response_model=schemas.StockMovementResponse)
-def validate_delivery(
-    delivery_id: int,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_warehouse_staff_user)
-):
-    """Validate a delivery: check sufficient stock, deduct source StockQuant, and transition to done."""
-    # Get the delivery movement
-    delivery = db.query(models.StockMovement).filter(models.StockMovement.id == delivery_id).first()
-    if not delivery:
-        raise HTTPException(status_code=404, detail="Delivery not found")
-    if delivery.document_type != models.DocType.DELIVERY:
-        raise HTTPException(status_code=400, detail="Not a delivery document")
-    if delivery.status != models.MoveStatus.READY:
-        raise HTTPException(status_code=400, detail=f"Delivery must be in READY status to validate, got {delivery.status}")
-    
-    # For deliveries, we decrease stock from the source location
-    if not delivery.source_location_id:
-        raise HTTPException(status_code=400, detail="Delivery has no source location")
-    
-    # Validate source location exists and is physical
-    source_location = db.query(models.WarehouseLocation).filter(models.WarehouseLocation.id == delivery.source_location_id).first()
-    if not source_location:
-        raise HTTPException(status_code=404, detail="Source location not found")
-    if source_location.is_virtual:
-        raise HTTPException(status_code=400, detail="Cannot validate delivery from virtual location")
-    
-    # Check sufficient stock at source location
-    stock_quant = db.query(models.StockQuant).filter(
-        models.StockQuant.product_id == delivery.product_id,
-        models.StockQuant.location_id == delivery.source_location_id
-    ).first()
-    
-    if not stock_quant:
-        raise HTTPException(status_code=400, detail="Insufficient stock: no stock record found")
-    if stock_quant.quantity < delivery.quantity:
-        raise HTTPException(status_code=400, detail=f"Insufficient stock: available {stock_quant.quantity}, needed {delivery.quantity}")
-    
-    # Decrease stock by the delivery quantity
-    stock_quant.quantity -= delivery.quantity
-    
-    # Transition delivery to DONE status
-    delivery.status = models.MoveStatus.DONE
-    
-    db.commit()
-    db.refresh(delivery)
-    return delivery
-
-
+# Note: The validation endpoints for transfers and adjustments are not required as they are completed immediately.

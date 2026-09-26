@@ -29,15 +29,6 @@ class UserRole(str, enum.Enum):
     WAREHOUSE_STAFF = "warehouse_staff"
 
 
-class PasswordReset(Base):
-    __tablename__ = "password_resets"
-
-    id = Column(Integer, primary_key=True, index=True)
-    email = Column(String, index=True, nullable=False)
-    otp = Column(String, nullable=False)
-    expires_at = Column(DateTime, nullable=False)
-    verified = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
 class StockQuant(Base):
@@ -63,6 +54,8 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
+    otp_hash = Column(String, nullable=True)
+    otp_expires = Column(DateTime, nullable=True)
     role = Column(Enum(UserRole), default=UserRole.WAREHOUSE_STAFF)
     is_active = Column(Boolean, default=True)
 
@@ -128,6 +121,8 @@ class StockMovement(Base):
     schedule_date = Column(DateTime, nullable=True)
     contact = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    # Flag to indicate if stock quant update has been applied
+    stock_updated = Column(Boolean, default=False)
 
     product = relationship("Product", back_populates="movements")
     source_location = relationship("WarehouseLocation", foreign_keys=[source_location_id])
@@ -136,10 +131,15 @@ class StockMovement(Base):
 
 
 @event.listens_for(StockMovement, 'after_insert')
+@event.listens_for(StockMovement, 'after_update')
 def update_stock_quant(mapper, connection, target):
     session = Session.object_session(target)
     if session is None:
         session = Session(bind=connection)
+
+    # Only process if movement is done and stock has not been updated yet
+    if target.status != MoveStatus.DONE or target.stock_updated:
+        return
 
     # Determine the location changes based on document_type
     changes = []  # list of (location_id, delta)
@@ -169,13 +169,22 @@ def update_stock_quant(mapper, connection, target):
                 changes.append((target.dest_location_id, target.quantity))
     elif target.document_type == DocType.ADJUSTMENT:
         # Adjustment: adjust stock at source_location_id (physical) by quantity (can be positive or negative)
-        if not target.source_location_id:
-            return
-        source_location = session.get(WarehouseLocation, target.source_location_id)
-        if source_location and not source_location.is_virtual:
-            changes.append((target.source_location_id, target.quantity))
+        # Note: In the adjustment endpoint, we set:
+        #   source_location_id if quantity_difference < 0 (we are decreasing stock)
+        #   dest_location_id if quantity_difference > 0 (we are increasing stock)
+        # And the quantity in the movement is the absolute difference.
+        if target.source_location_id:
+            # Decreasing stock at source_location_id
+            source_location = session.get(WarehouseLocation, target.source_location_id)
+            if source_location and not source_location.is_virtual:
+                changes.append((target.source_location_id, -target.quantity))
+        if target.dest_location_id:
+            # Increasing stock at dest_location_id
+            dest_location = session.get(WarehouseLocation, target.dest_location_id)
+            if dest_location and not dest_location.is_virtual:
+                changes.append((target.dest_location_id, target.quantity))
 
-    # Apply changes to StockQuant with row-level locking
+    # Apply changes to StockQuant with row-level locking and check for sufficient stock
     for location_id, delta in changes:
         # Lock the StockQuant row for update
         stock_quant = session.query(StockQuant).filter_by(
@@ -192,4 +201,12 @@ def update_stock_quant(mapper, connection, target):
             )
             session.add(stock_quant)
 
+        # Check for sufficient stock if delta is negative (outgoing movement)
+        if delta < 0 and stock_quant.quantity + delta < 0:
+            raise ValueError(f"Insufficient stock at location {location_id} for product {target.product_id}")
+
         stock_quant.quantity += delta
+
+    # Mark the movement as having its stock updated
+    target.stock_updated = True
+    session.add(target)

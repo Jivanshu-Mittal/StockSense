@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from core.config import settings
@@ -6,10 +6,17 @@ from routers import auth, products, operations, dashboard, locations
 
 app = FastAPI(title=settings.PROJECT_NAME, version="0.1.0")
 
-# TODO: lock this down before going to prod
+# Configure CORS with strict, environment-controlled origins
+origins = [origin.strip() for origin in settings.BACKEND_CORS_ORIGINS.split(",")]
+# Remove wildcard origins when credentials are enabled (security best practice)
+origins = [origin for origin in origins if origin != "*"]
+# If after removing wildcards we have no origins, use default development origins
+if not origins:
+    origins = ["http://localhost:3000", "http://localhost:8081", "http://localhost:19006"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS.split(","),
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

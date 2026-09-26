@@ -58,13 +58,9 @@ def forgot_password(email: str, db: Session = Depends(get_db)):
     # Set expiration to 10 minutes from now
     expires_at = datetime.utcnow() + timedelta(minutes=10)
 
-    # Create password reset record
-    password_reset = models.PasswordReset(
-        email=email,
-        otp=otp,
-        expires_at=expires_at
-    )
-    db.add(password_reset)
+    # Hash the OTP and store in user record
+    user.otp_hash = get_password_hash(otp)
+    user.otp_expires = expires_at
     db.commit()
 
     # In a real application, you would send the OTP via email
@@ -81,32 +77,33 @@ def reset_password_otp(
     new_password: str,
     db: Session = Depends(get_db)
 ):
-    # Find the OTP record
-    password_reset = db.query(models.PasswordReset).filter(
-        models.PasswordReset.email == email,
-        models.PasswordReset.otp == otp,
-        models.PasswordReset.expires_at > datetime.utcnow(),
-        models.PasswordReset.verified == False
-    ).first()
+    # Find the user by email
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid email or OTP"
+        )
 
-    if not password_reset:
+    # Check if OTP hash and expiration exist and are valid
+    if not user.otp_hash or not user.otp_expires or user.otp_expires < datetime.utcnow():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired OTP"
+        )
+
+    # Verify the OTP
+    if not verify_password(otp, user.otp_hash):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid or expired OTP"
         )
 
     # Update user's password
-    user = db.query(models.User).filter(models.User.email == email).first()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-
     user.hashed_password = get_password_hash(new_password)
-
-    # Mark OTP as verified
-    password_reset.verified = True
+    # Clear OTP fields
+    user.otp_hash = None
+    user.otp_expires = None
 
     db.commit()
 

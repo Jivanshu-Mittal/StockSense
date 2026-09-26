@@ -28,10 +28,8 @@ def seed_db():
         if not admin_password:
             # Generate a secure random password for admin
             admin_password = secrets.token_urlsafe(16)
-            log.warning(
-                "ADMIN_PASSWORD not set in environment. "
-                f"Generated secure admin password: {admin_password}"
-            )
+            print(f"Generated admin password: {admin_password}")
+            print("WARNING: This password must be changed on first login.")
 
         # Create admin user as inventory manager
         db.add(models.User(
@@ -40,14 +38,20 @@ def seed_db():
             role=models.UserRole.INVENTORY_MANAGER
         ))
 
-        # Create test users with random passwords
+        # Get default user password from environment or generate secure one
+        user_password = os.environ.get("DEFAULT_USER_PASSWORD")
+        if not user_password:
+            # Generate a secure random password for test users
+            user_password = secrets.token_urlsafe(16)
+            print(f"Generated default user password: {user_password}")
+            print("WARNING: This password must be changed on first login.")
+
+        # Create test users with the default password
         users = []
         for i in range(99):
-            # Generate random password for each test user
-            random_password = secrets.token_urlsafe(16)
             users.append(models.User(
                 email=fake.unique.email(),
-                hashed_password=get_password_hash(random_password),
+                hashed_password=get_password_hash(user_password),
                 role=models.UserRole.WAREHOUSE_STAFF
             ))
 

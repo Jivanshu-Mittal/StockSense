@@ -68,6 +68,7 @@ class ReceiptCreate(BaseModel):
     contact_email: str
     reference_code: str
     schedule_date: Optional[datetime] = None
+    dest_location_id: int  # Physical warehouse where stock is received
 
 
 class DeliveryCreate(BaseModel):
@@ -77,6 +78,7 @@ class DeliveryCreate(BaseModel):
     contact_email: str
     reference_code: str
     schedule_date: Optional[datetime] = None
+    source_location_id: int  # Physical warehouse from which stock is shipped
 
 
 class TransferCreate(BaseModel):
