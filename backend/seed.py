@@ -24,7 +24,7 @@ def seed_db():
         log.info("creating admin + 99 test users...")
 
         # Get admin password from environment or generate secure one
-        admin_password = os.environ.get("ADMIN_PASSWORD")
+        admin_password = os.environ.get("DEFAULT_ADMIN_PASSWORD")
         if not admin_password:
             # Generate a secure random password for admin
             admin_password = secrets.token_urlsafe(16)

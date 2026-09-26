@@ -5,8 +5,8 @@ import json
 
 
 class InventoryManagerUser(HttpUser):
-    """Simulates an inventory manager user."""
-    wait_time = between(2, 5)
+    """Simulates an inventory manager user responsible for stock control."""
+    wait_time = between(3, 6)
     token = None
     email = "admin@stocksense.com"
     password = None  # Will be set from environment variable ADMIN_PASSWORD
@@ -34,19 +34,38 @@ class InventoryManagerUser(HttpUser):
     def _headers(self):
         return {"Authorization": f"Bearer {self.token}"} if self.token else {}
 
-    @task(3)
+    @task(5)
     def browse_products(self):
+        """Browse products list."""
         self.client.get("/products/", headers=self._headers())
 
-    @task(2)
-    def browse_movements(self):
-        self.client.get("/operations/movements", headers=self._headers())
+    @task(4)
+    def browse_movements_with_filters(self):
+        """Browse movements with various filters."""
+        # Randomly apply filters
+        params = {}
+        if random.choice([True, False]):
+            params["document_type"] = random.choice(["receipt", "delivery", "internal", "adjustment"])
+        if random.choice([True, False]):
+            params["status"] = random.choice(["draft", "waiting", "ready", "done", "canceled"])
+        if random.choice([True, False]):
+            params["category"] = random.choice(["Electronics", "Clothing", "Food", "Hardware"])
+        if random.choice([True, False]):
+            params["limit"] = random.choice([10, 25, 50])
 
-    @task(1)
+        self.client.get("/operations/movements", params=params, headers=self._headers())
+
+    @task(3)
     def get_dashboard_kpis(self):
+        """Get dashboard KPIs - frequently accessed by managers."""
         self.client.get("/dashboard/kpis", headers=self._headers())
 
-    @task(1)
+    @task(2)
+    def get_locations(self):
+        """Browse warehouse locations."""
+        self.client.get("/locations/", headers=self._headers())
+
+    @task(2)
     def create_product(self):
         """Create a new product with random initial stock."""
         payload = {
@@ -58,7 +77,7 @@ class InventoryManagerUser(HttpUser):
         }
         self.client.post("/products/", json=payload, headers=self._headers())
 
-    @task(1)
+    @task(3)
     def create_receipt(self):
         """Create a receipt for a random product."""
         # First, get a list of products to choose from
@@ -70,45 +89,74 @@ class InventoryManagerUser(HttpUser):
             return
         product = random.choice(products)
 
+        # Get a physical destination location (not virtual)
+        locations_resp = self.client.get("/locations/", headers=self._headers())
+        if not locations_resp.ok:
+            return
+        locations = [loc for loc in locations_resp.json() if not loc["is_virtual"]]
+        if not locations:
+            return
+        dest_location = random.choice(locations)
+
         payload = {
             "product_id": product["id"],
             "quantity": random.randint(5, 50),
             "partner_name": f"Vendor {random.randint(1, 20)}",
             "contact_email": f"vendor{random.randint(1,20)}@example.com",
-            "reference_code": f"REF{random.randint(1000,9999)}"
+            "reference_code": f"REF{random.randint(1000,9999)}",
+            "dest_location_id": dest_location["id"]
         }
         self.client.post("/operations/receipts", json=payload, headers=self._headers())
 
-    @task(1)
+    @task(2)
     def create_transfer(self):
-        """Create a transfer between two locations."""
-        # We need at least two locations. We'll assume the seeded locations exist.
-        # Get locations (we don't have an endpoint for locations, so we'll use hardcoded IDs from seed)
-        # From seed.py: Main Warehouse (id=1), Vendors (id=2, virtual), Customers (id=3, virtual)
-        # For transfer, we need physical locations. Only Main Warehouse is physical.
-        # We'll need to create a second physical location? Not in seed.
-        # For simplicity, we'll skip transfer if we don't have two physical locations.
-        # Alternatively, we can create a location via API? There's no endpoint.
-        # We'll assume there are at least two physical locations with IDs 1 and 4? Not reliable.
-        # Let's instead get a list of products and use the same location for source and dest?
-        # But transfer requires different locations.
-        # We'll skip this task for now and rely on the fact that we have at least two locations from seed?
-        # Actually seed only creates one physical location.
-        # We'll create a transfer only if we have at least two locations; we'll try to get locations from the product's stock quants?
-        # Too complex for load testing. We'll skip transfer and focus on other operations.
-        pass
-
-    @task(1)
-    def create_adjustment(self):
-        """Create an adjustment for a random product."""
-        # Get a product
-        resp = self.client.get("/products/", headers=self._headers())
-        if not resp.ok:
+        """Create a transfer between two physical locations."""
+        # Get products
+        products_resp = self.client.get("/products/", headers=self._headers())
+        if not products_resp.ok:
             return
-        products = resp.json()
+        products = products_resp.json()
         if not products:
             return
         product = random.choice(products)
+
+        # Get two different physical locations
+        locations_resp = self.client.get("/locations/", headers=self._headers())
+        if not locations_resp.ok:
+            return
+        physical_locations = [loc for loc in locations_resp.json() if not loc["is_virtual"]]
+        if len(physical_locations) < 2:
+            return
+        source_loc, dest_loc = random.sample(physical_locations, 2)
+
+        payload = {
+            "product_id": product["id"],
+            "quantity": random.randint(1, 30),
+            "source_location_id": source_loc["id"],
+            "dest_location_id": dest_loc["id"]
+        }
+        self.client.post("/operations/transfers", json=payload, headers=self._headers())
+
+    @task(2)
+    def create_adjustment(self):
+        """Create an adjustment for a random product."""
+        # Get a product
+        products_resp = self.client.get("/products/", headers=self._headers())
+        if not products_resp.ok:
+            return
+        products = products_resp.json()
+        if not products:
+            return
+        product = random.choice(products)
+
+        # Get a physical location
+        locations_resp = self.client.get("/locations/", headers=self._headers())
+        if not locations_resp.ok:
+            return
+        physical_locations = [loc for loc in locations_resp.json() if not loc["is_virtual"]]
+        if not physical_locations:
+            return
+        location = random.choice(physical_locations)
 
         # Determine if we want to increase or decrease stock
         increase = random.choice([True, False])
@@ -119,15 +167,30 @@ class InventoryManagerUser(HttpUser):
         payload = {
             "product_id": product["id"],
             "quantity": quantity,
-            # We'll not specify location for general adjustment (allowed by schema)
-            # source_location_id and dest_location_id will be None
+            # For adjustments, we set either source or destination location based on quantity sign
+            "source_location_id": location["id"] if quantity < 0 else None,
+            "dest_location_id": location["id"] if quantity > 0 else None
         }
         self.client.post("/operations/adjustments", json=payload, headers=self._headers())
 
+    @task(1)
+    def validate_receipt(self):
+        """Validate a existing receipt in DONE status."""
+        # Get recent receipts
+        resp = self.client.get("/operations/movements?document_type=receipt&status=done&limit=10", headers=self._headers())
+        if not resp.ok:
+            return
+        receipts = resp.json()
+        if not receipts:
+            return
+        receipt = random.choice(receipts)
+
+        self.client.post(f"/operations/receipts/{receipt['id']}/validate", headers=self._headers())
+
 
 class WarehouseStaffUser(HttpUser):
-    """Simulates a warehouse staff user."""
-    wait_time = between(1, 4)
+    """Simulates a warehouse staff user focused on picking, packing, and shipping."""
+    wait_time = between(2, 5)
     token = None
     email = None
     password = "password123"
@@ -142,9 +205,7 @@ class WarehouseStaffUser(HttpUser):
             "/auth/signup",
             json={"email": self.email, "password": self.password}
         )
-        if not resp.ok:
-            # If signup fails (maybe email already exists), we try to login directly
-            pass
+        # Ignore signup result - if user exists, login will work; if not, we've created them
 
         # Login
         resp = self.client.post(
@@ -160,29 +221,41 @@ class WarehouseStaffUser(HttpUser):
     def _headers(self):
         return {"Authorization": f"Bearer {self.token}"} if self.token else {}
 
-    @task(3)
+    @task(4)
     def browse_products(self):
+        """Browse products list."""
         self.client.get("/products/", headers=self._headers())
 
-    @task(2)
+    @task(3)
     def browse_movements(self):
-        self.client.get("/operations/movements", headers=self._headers())
+        """Browse recent movements."""
+        self.client.get("/operations/movements?limit=20", headers=self._headers())
 
-    @task(1)
+    @task(3)
     def get_dashboard_kpis(self):
+        """Get dashboard KPIs."""
         self.client.get("/dashboard/kpis", headers=self._headers())
 
-    @task(2)
+    @task(4)
     def create_delivery_and_process(self):
         """Create a delivery and advance it through the workflow."""
         # Get a product
-        resp = self.client.get("/products/", headers=self._headers())
-        if not resp.ok:
+        products_resp = self.client.get("/products/", headers=self._headers())
+        if not products_resp.ok:
             return
-        products = resp.json()
+        products = products_resp.json()
         if not products:
             return
         product = random.choice(products)
+
+        # Get a physical source location
+        locations_resp = self.client.get("/locations/", headers=self._headers())
+        if not locations_resp.ok:
+            return
+        physical_locations = [loc for loc in locations_resp.json() if not loc["is_virtual"]]
+        if not physical_locations:
+            return
+        source_location = random.choice(physical_locations)
 
         # Step 1: Create delivery (DRAFT)
         payload = {
@@ -190,7 +263,8 @@ class WarehouseStaffUser(HttpUser):
             "quantity": random.randint(5, 30),
             "partner_name": f"Customer {random.randint(1, 50)}",
             "contact_email": f"customer{random.randint(1,50)}@example.com",
-            "reference_code": f"DEL{random.randint(1000,9999)}"
+            "reference_code": f"DEL{random.randint(1000,9999)}",
+            "source_location_id": source_location["id"]
         }
         resp = self.client.post("/operations/deliveries", json=payload, headers=self._headers())
         if not resp.ok:
@@ -198,29 +272,118 @@ class WarehouseStaffUser(HttpUser):
         delivery = resp.json()
         delivery_id = delivery["id"]
 
-        # Step 2: Transition to WAITING (optional, we might skip)
+        # Step 2: Transition to WAITING (sometimes)
         if random.choice([True, False]):
             resp = self.client.post(f"/operations/deliveries/{delivery_id}/waiting", headers=self._headers())
             if not resp.ok:
                 return
 
-        # Step 3: Transition to READY (optional)
+        # Step 3: Transition to READY (sometimes)
         if random.choice([True, False]):
             resp = self.client.post(f"/operations/deliveries/{delivery_id}/ready", headers=self._headers())
             if not resp.ok:
                 return
 
-        # Step 4: Transition to DONE (or sometimes CANCELED)
+        # Step 4: Transition to DONE or CANCELED
         if random.choice([True, False]):
-            # Cancel instead of completing
-            resp = self.client.post(f"/operations/deliveries/{delivery_id}/canceled", headers=self._headers())
+            # Cancel instead of completing (10% chance)
+            if random.random() < 0.1:
+                resp = self.client.post(f"/operations/deliveries/{delivery_id}/canceled", headers=self._headers())
+            else:
+                resp = self.client.post(f"/operations/deliveries/{delivery_id}/done", headers=self._headers())
         else:
-            resp = self.client.post(f"/operations/deliveries/{delivery_id}/done", headers=self._headers())
+            # Stay in current state (DRAFT, WAITING, or READY)
+            pass
+
+    @task(2)
+    def get_pending_dashboard_counts(self):
+        """Specifically check pending operations from dashboard perspective."""
+        # This hits the same endpoint but we're focusing on the pending counts
+        self.client.get("/dashboard/kpis", headers=self._headers())
 
 
-# For running multiple user types, we can specify weights if needed.
-# By default, each user class is weighted equally.
-# We can adjust by setting a weight attribute.
-# Let's set inventory manager to weight 1 and warehouse staff to weight 2 to have more warehouse staff.
-InventoryManagerUser.weight = 1
-WarehouseStaffUser.weight = 2
+class ReportingUser(HttpUser):
+    """Simulates a user who primarily checks reports and analytics."""
+    wait_time = between(5, 10)
+    token = None
+    email = "reporter@stocksense.com"
+    password = None
+
+    def on_start(self):
+        """Log in as reporter user."""
+        self.password = os.environ.get("REPORTER_PASSWORD", "reporter123")
+        self.email = "reporter@stocksense.com"
+
+        # Login
+        resp = self.client.post(
+            "/auth/login",
+            data={"username": self.email, "password": self.password},
+            headers={"Content-Type": "application/x-www-form-urlencoded"}
+        )
+        if resp.ok:
+            self.token = resp.json().get("access_token")
+        else:
+            # For load testing, we'll fall back to using admin credentials if reporter doesn't exist
+            self.email = "admin@stocksense.com"
+            self.password = os.environ.get("ADMIN_PASSWORD", "admin")
+            resp = self.client.post(
+                "/auth/login",
+                data={"username": self.email, "password": self.password},
+                headers={"Content-Type": "application/x-www-form-urlencoded"}
+            )
+            if resp.ok:
+                self.token = resp.json().get("access_token")
+            else:
+                raise Exception(f"Failed to login: {resp.status_code} {resp.text}")
+
+    def _headers(self):
+        return {"Authorization": f"Bearer {self.token}"} if self.token else {}
+
+    @task(10)
+    def get_dashboard_kpis(self):
+        """Frequently check dashboard KPIs."""
+        self.client.get("/dashboard/kpis", headers=self._headers())
+
+    @task(5)
+    def browse_movements_detailed(self):
+        """Browse movements with detailed filtering for reports."""
+        # Complex filtering for report generation
+        params = {
+            "limit": 100,
+            "offset": 0
+        }
+
+        # Add random date ranges for reports
+        if random.choice([True, False]):
+            params["start_date"] = "2026-01-01"
+        if random.choice([True, False]):
+            params["end_date"] = "2026-12-31"
+
+        # Add random document types
+        if random.choice([True, False]):
+            params["document_type"] = random.choice(["receipt", "delivery", "internal", "adjustment"])
+
+        self.client.get("/operations/movements", params=params, headers=self._headers())
+
+    @task(3)
+    def export_movements_csv(self):
+        """Simulate exporting movements data (using limit to get large dataset)."""
+        self.client.get("/operations/movements?limit=500", headers=self._headers())
+
+    @task(2)
+    def analyze_product_categories(self):
+        """Analyze movements by product category."""
+        params = {
+            "limit": 50,
+            "category": random.choice(["Electronics", "Clothing", "Food", "Hardware"])
+        }
+        self.client.get("/operations/movements", params=params, headers=self._headers())
+
+
+# User class weights for realistic distribution
+# Inventory managers: 30% - responsible for stock control
+# Warehouse staff: 50% - largest group doing day-to-day operations
+# Reporting users: 20% - checking analytics and reports
+InventoryManagerUser.weight = 3
+WarehouseStaffUser.weight = 5
+ReportingUser.weight = 2
